@@ -1,19 +1,16 @@
 import os
 import random
+import time
 import tkinter as tk
-import uuid  # uuid 모듈 추가
+import uuid
 from tkinter import messagebox
 
 import cv2
 import openai
 import pygame
-import time
 from PIL import Image, ImageTk
 from gtts import gTTS
 from playsound import playsound
-
-# OpenAI API 키 설정
-openai.api_key = "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"
 
 
 def load_interview_questions(filename):
@@ -56,6 +53,13 @@ def save_interview_questions(filename, questions):
 
 class InterviewApp:
     def __init__(self, root):
+        self.root = None
+        self.familiar_questions = []
+        self.question_frequency = {}  # 질문 빈도수를 저장할 딕셔너리
+        self.load_question_frequency()  # 질문 빈도수 불러오기
+        self.question_frequency_label = tk.Label(self.root, text="이 질문의 빈도수: 0", font=("Helvetica", 12))
+        self.question_frequency_label.pack(pady=5, anchor="nw")
+        self.load_familiar_questions()
         self.root = root
         self.root.title("면접 연습 프로그램")
         self.total_start_time = time.time()  # 전체 경과 시간 측정을 위한 시작 시간 기록
@@ -65,7 +69,6 @@ class InterviewApp:
         self.question_counter = 0  # 질문 카운터 초기화
         self.question_counter_label = tk.Label(self.root, text="질문 넘김 횟수: 0", font=("Helvetica", 12))
         self.question_counter_label.pack(pady=5, anchor="nw")  # 카운터 레이블을 UI에 추가
-
 
         self.add_question_dialog = None  # 대화 상자 인스턴스 변수 초기화
         self.new_question_entry = None  # 질문 입력 필드 인스턴스 변수 초기화
@@ -95,6 +98,9 @@ class InterviewApp:
         self.add_question_button = tk.Button(self.root, text="질문 추가", command=self.show_add_question_dialog)
         self.add_question_button.pack()
 
+        self.familiar_button = tk.Button(self.root, text="익숙한 질문으로 표시", command=self.mark_as_familiar)
+        self.familiar_button.pack(pady=10)
+
         self.start_time = time.time()
         self.init_time = time.time()  # 문장 표시 초기 시간
         self.is_playing = False  # 음성 재생 여부
@@ -102,6 +108,36 @@ class InterviewApp:
         pygame.mixer.init()  # mixer 초기화
 
         self.update_total_timer()  # 전체 경과 시간 업데이트 함수 호출
+
+    def mark_as_familiar(self):
+        try:
+            print("mark_as_familiar 호출됨")  # 메소드 호출 확인
+            if self.current_question_index < len(self.extracted_texts):
+                question = self.extracted_texts[self.current_question_index]
+                print(f"현재 질문: {question}")  # 현재 질문 출력
+                # 익숙한 질문 목록에 현재 질문 추가
+                if question not in self.familiar_questions:
+                    self.familiar_questions.append(question)
+                    print(f"익숙한 질문에 추가됨: {self.familiar_questions}")  # 업데이트된 목록 출력
+                    self.save_familiar_questions()
+                else:
+                    print("이미 목록에 존재하는 질문입니다.")  # 질문이 이미 목록에 있는 경우
+            else:
+                print("유효한 질문 인덱스가 아닙니다.")  # 현재 질문 인덱스가 유효하지 않은 경우
+        except Exception as e:
+            print(f"오류 발생: {e}")  # 예외 처리
+
+    def load_familiar_questions(self):
+        try:
+            with open("familiar_questions.txt", "r", encoding="utf-8") as file:
+                self.familiar_questions = [line.strip() for line in file.readlines()]
+        except FileNotFoundError:
+            pass
+
+    def save_familiar_questions(self):
+        with open("familiar_questions.txt", "w", encoding="utf-8") as file:
+            for question in self.familiar_questions:
+                file.write(question + "\n")
 
     def show_add_question_dialog(self):
         self.add_question_dialog = tk.Toplevel(self.root)
@@ -118,25 +154,49 @@ class InterviewApp:
         confirm_button.pack(pady=10)
 
     def display_question(self):
-        if self.current_question_index < len(self.extracted_texts):
-            question = self.extracted_texts[self.current_question_index]
-            self.question_label.config(text=question)
-            self.init_time = time.time()  # 문장 표시 초기 시간 기록
-            if self.is_playing:
-                pygame.mixer.music.stop()  # 음성 정지
-            self.speak_question(question)  # 질문 음성으로 말하기
-            self.update_timer()
-            self.start_time = time.time()  # 타이머 시작
+
+        question = self.extracted_texts[self.current_question_index]
+        if question in self.question_frequency:
+            self.question_frequency[question] += 1
+        else:
+            self.question_frequency[question] = 1
+        self.save_question_frequency()  # 변경된 질문 빈도수 저장
+        self.update_question_frequency_label(question)  # 질문 빈도수 레이블 업데이트
+
+        try:
+            if self.current_question_index < len(self.extracted_texts):
+                question = self.extracted_texts[self.current_question_index]
+                self.question_label.config(text=question)
+                self.init_time = time.time()
+                if self.is_playing:
+                    pygame.mixer.music.stop()
+                self.speak_question(question)
+                self.update_timer()
+                self.start_time = time.time()
+        except Exception as e:
+            print(f"An error occurred: {e}")
+
+    def update_question_frequency_label(self, question):
+        """선택된 질문의 빈도수를 레이블에 업데이트합니다."""
+        frequency = self.question_frequency.get(question, 0)
+        self.question_frequency_label.config(text=f"이 질문의 빈도수: {frequency}")
 
     def next_question(self):
         if self.is_playing:
             return
-        if not self.questions:
-            self.questions = self.extracted_texts.copy()  # 질문이 모두 소진되면 다시 복사
-        self.current_question_index = random.randint(0, len(self.questions) - 1)
-        self.question_label.config(text="")
-        self.init_time = 0
-        self.start_time = time.time()
+
+        # '익숙하지 않은 질문' 목록 생성
+        unfamiliar_questions = [q for q in self.extracted_texts if q not in self.familiar_questions]
+
+        if unfamiliar_questions:
+            # '익숙하지 않은 질문' 목록에서 무작위로 질문 선택
+            question = random.choice(unfamiliar_questions)
+            self.current_question_index = self.extracted_texts.index(question)
+        else:
+            # 모든 질문이 '익숙한' 경우, 전체 목록에서 무작위로 질문 선택
+            self.current_question_index = random.randint(0, len(self.extracted_texts) - 1)
+
+        # 선택된 질문 표시
         self.display_question()
 
         # 카운터 업데이트
@@ -183,6 +243,36 @@ class InterviewApp:
             messagebox.showinfo("알림", "새로운 질문이 추가되었습니다.")
             self.add_question_dialog.destroy()  # 대화 상자
 
+    def load_question_frequency(self):
+        try:
+            with open("question_frequency.txt", "r", encoding="utf-8") as file:
+                for line in file:
+                    question, count = line.strip().split(":")
+                    self.question_frequency[question] = int(count)
+        except FileNotFoundError:
+            pass
+
+    def save_question_frequency(self):
+        """질문 빈도수를 파일에 저장합니다."""
+        with open("question_frequency.txt", "w", encoding="utf-8") as file:
+            for question, count in self.question_frequency.items():
+                file.write(f"{question}:{count}\n")
+
+    def show_question_frequency(self):
+        """질문 빈도수를 보여주는 다이얼로그를 생성합니다."""
+        frequency_dialog = tk.Toplevel(self.root)
+        frequency_dialog.title("질문 빈도수")
+        frequency_dialog.geometry("300x400")
+        for question, count in sorted(self.question_frequency.items(), key=lambda item: item[1], reverse=True):
+            label = tk.Label(frequency_dialog, text=f"{question}: {count}회")
+            label.pack()
+
+    def reset_question_frequency(self):
+        """질문 빈도수를 리셋합니다."""
+        self.question_frequency = {}
+        self.save_question_frequency()
+        messagebox.showinfo("알림", "질문 빈도수가 리셋되었습니다.")
+
 
 class CameraApp:
     def __init__(self, root):
@@ -212,8 +302,8 @@ if __name__ == "__main__":
     camera_app = CameraApp(root)
 
     # 창 크기 설정
-    window_width = 1000
-    window_height = 800
+    window_width = 1200
+    window_height = 1000
 
     # 화면 중앙에 창 배치
     screen_width = root.winfo_screenwidth()
